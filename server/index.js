@@ -11,8 +11,21 @@ const JWT_SECRET = process.env.JWT_SECRET || 'aura_super_secure_jwt_secret_2026'
 app.use(cors());
 app.use(express.json());
 
-// Initialize DB tables
+// Resilient DB Schema Initialization
 db.serialize(() => {
+  // Ensure users table exists
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'customer',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Ensure orders table exists
   db.run(`
     CREATE TABLE IF NOT EXISTS orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +37,7 @@ db.serialize(() => {
     )
   `);
 
+  // Ensure order items table exists
   db.run(`
     CREATE TABLE IF NOT EXISTS order_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,10 +49,11 @@ db.serialize(() => {
   `);
 });
 
-// API Routes
+// Authentication Routes
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
+// Catalog Products endpoint
 app.get('/api/products', (req, res) => {
   db.all('SELECT * FROM products ORDER BY id ASC', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -46,6 +61,7 @@ app.get('/api/products', (req, res) => {
   });
 });
 
+// Resilient Order Placement Endpoint
 app.post('/api/orders', (req, res) => {
   const { items, total_amount, shipping_address } = req.body;
   let userId = 1;
@@ -80,6 +96,7 @@ app.post('/api/orders', (req, res) => {
   });
 });
 
+// Order lookup endpoint
 app.get('/api/orders/:id', (req, res) => {
   const orderId = req.params.id;
   db.get('SELECT * FROM orders WHERE id = ?', [orderId], (err, row) => {
@@ -88,7 +105,7 @@ app.get('/api/orders/:id', (req, res) => {
   });
 });
 
-// Serve frontend static files
+// Serve frontend static build
 const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
