@@ -6,73 +6,95 @@ const db = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'aura_super_secure_jwt_secret_2026';
 
-// Register Customer / Admin
-router.post('/register', (req, res) => {
-  const { name, email, password } = req.body;
+// Cloud In-Memory Fallback store if SQLite ephemeral disk locks
+const memoryUsers = new Map();
 
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Name, email, and password are required.' });
-  }
-
-  // Check if user already exists
-  db.get('SELECT * FROM users WHERE email = ?', [email], (err, existingUser) => {
-    if (err) {
-      console.error('DB lookup error:', err.message);
-      return res.status(500).json({ error: 'Database verification failed.' });
+// REGISTER
+router.post('/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
 
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email is already registered. Please log in.' });
-    }
+    const normalizedEmail = email.toLowerCase().trim();
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const role = normalizedEmail.includes('admin') ? 'admin' : 'customer';
 
-    // Hash password
-    const saltRounds = 10;
-    const password_hash = bcrypt.hashSync(password, saltRounds);
-    const role = email.toLowerCase().includes('admin') ? 'admin' : 'customer';
+    // Try SQLite first
+    db.run(
+      'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
+      [name.trim(), normalizedEmail, hashedPassword, role],
+      function (err) {
+        let userId = this ? this.lastID : Date.now();
 
-    const insertSql = 'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)';
-    db.run(insertSql, [name, email, password_hash, role], function (insertErr) {
-      if (insertErr) {
-        console.error('DB insert error:', insertErr.message);
-        return res.status(500).json({ error: 'Failed to record user credentials.' });
+        if (err) {
+          // If already exists in SQLite
+          if (err.message && err.message.includes('UNIQUE')) {
+            return res.status(400).json({ error: 'Account with this email already exists.' });
+          }
+          // Ephemeral storage fallback
+          memoryUsers.set(normalizedEmail, { id: userId, name: name.trim(), email: normalizedEmail, password_hash: hashedPassword, role });
+        } else {
+          memoryUsers.set(normalizedEmail, { id: userId, name: name.trim(), email: normalizedEmail, password_hash: hashedPassword, role });
+        }
+
+        const token = jwt.sign({ id: userId, email: normalizedEmail, role }, JWT_SECRET, { expiresIn: '7d' });
+        return res.status(201).json({
+          token,
+          user: { id: userId, name: name.trim(), email: normalizedEmail, role }
+        });
       }
-
-      const user = { id: this.lastID, name, email, role };
-      const token = jwt.sign(user, JWT_SECRET, { expiresIn: '7d' });
-
-      return res.status(201).json({ token, user });
-    });
-  });
+    );
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Internal registration handshake failure.' });
+  }
 });
 
-// Login User
+// LOGIN / SIGN-IN
 router.post('/login', (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
 
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Query SQLite database
+    db.get('SELECT * FROM users WHERE email = ?', [normalizedEmail], async (err, row) => {
+      let targetUser = row;
+
+      // Check fallback memory if SQLite missed it
+      if (!targetUser && memoryUsers.has(normalizedEmail)) {
+        targetUser = memoryUsers.get(normalizedEmail);
+      }
+
+      if (!targetUser) {
+        return res.status(400).json({ error: 'Account not found. Please register first.' });
+      }
+
+      const match = await bcrypt.compare(password, targetUser.password_hash);
+      if (!match) {
+        return res.status(400).json({ error: 'Invalid password. Please check your credentials.' });
+      }
+
+      const token = jwt.sign(
+        { id: targetUser.id, email: targetUser.email, role: targetUser.role },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        token,
+        user: { id: targetUser.id, name: targetUser.name, email: targetUser.email, role: targetUser.role }
+      });
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal login handshake failure.' });
   }
-
-  db.get('SELECT * FROM users WHERE email = ?', [email], (err, user) => {
-    if (err) {
-      console.error('Login DB error:', err.message);
-      return res.status(500).json({ error: 'Database verification failed.' });
-    }
-
-    if (!user) {
-      return res.status(400).json({ error: 'Invalid email or password.' });
-    }
-
-    const isMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(400).json({ error: 'Invalid email or password.' });
-    }
-
-    const userData = { id: user.id, name: user.name, email: user.email, role: user.role };
-    const token = jwt.sign(userData, JWT_SECRET, { expiresIn: '7d' });
-
-    return res.status(200).json({ token, user: userData });
-  });
 });
 
 module.exports = router;
