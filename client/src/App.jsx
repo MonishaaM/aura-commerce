@@ -162,7 +162,7 @@ export default function App() {
         shipping_address: '221B Baker Street, Chennai, TN'
       };
 
-      const res = await axios.post('http://localhost:5000/api/orders', payload, {
+      const res = await axios.post('/api/orders', payload, {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
 
@@ -181,7 +181,7 @@ export default function App() {
     if (!trackingId) return;
     sound.playClick();
     try {
-      const res = await axios.get(`http://localhost:5000/api/orders/${trackingId}`);
+      const res = await axios.get(`/api/orders/${trackingId}`);
       setTrackingStatus(res.data.status);
     } catch {
       alert('Order ID not located in database.');

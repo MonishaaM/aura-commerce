@@ -23,7 +23,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
     const payload = isLogin ? { email, password } : { name, email, password };
 
     try {
-      const res = await axios.post(`http://localhost:5000${endpoint}`, payload);
+      const res = await axios.post(`${endpoint}`, payload);
       sound.playGlitterChime();
       onAuthSuccess(res.data);
       onClose();
